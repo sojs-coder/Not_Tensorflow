@@ -1,0 +1,23 @@
+{
+  "name": "not_tensorflow",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sojs-coder/Not_Tensorflow.git"
+  },
+  "author": "SoJS",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/sojs-coder/Not_Tensorflow/issues"
+  },
+  "homepage": "https://github.com/sojs-coder/Not_Tensorflow#readme",
+  "dependencies": {
+    "chartjs-node-canvas": "^4.1.6",
+    "js-big-decimal": "^2.0.7"
+  }
+}
