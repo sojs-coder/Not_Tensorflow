@@ -1,13 +1,13 @@
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 const fs = require("fs");
 var bigDecimal = require('js-big-decimal').default;
-const { threadId } = require('worker_threads');
 class Network {
-    constructor({ inputs, outputs, hiddenLayers = [], activation }) {
+    constructor({ inputs, outputs, hiddenLayers = [], activation, ignoreNaN=false }) {
         this.activationFunction = activation;
         this.numInputs = inputs;
         this.numOutputs = outputs;
         this.network = [];
+        this.ignoreNaN = ignoreNaN
         this.hiddenSpec = hiddenLayers;
         // first layer is input layer
         this.network.push(new Layer(inputs));
@@ -21,7 +21,7 @@ class Network {
             new Layer(outputs, this.network[this.network.length - 1]),
         );
     }
-    reinitialize(){
+    reinitialize() {
         this.network = [];
         this.network.push(new Layer(this.numInputs));
         for (var i = 0; i < this.hiddenSpec.length; i++) {
@@ -70,17 +70,7 @@ class Network {
     // for multi-dimensional inputs
     // [[node1_min,node1_max], [node2_min,node2_max]]
     // etc
-    studyOutput({ inputRange, inputStep, neuron, aspects, graph, inputFunction}) {
-        var parts = neuron.split("-");
-        var layerP = parts[0].substring(1);
-        var nodeP = parts[1].substring(1);
-
-        var layerNum = parseInt(layerP);
-        var nodeNum = parseInt(nodeP) - 1;
-
-        var layer = this.network[layerNum];
-        var node = layer.neurons[nodeNum];
-
+    studyOutput({ inputRange, inputStep, neuron, aspects, graph, inputFunction }) {
         var dataPoints = {
             labels: []
         }
@@ -102,17 +92,27 @@ class Network {
                             if (aspectDenom == "output") {
                                 var onNode = parseInt(aParts[2].substring(1)) - 1;
                                 dataPoints[aspect].push(output[onNode]);
-                                if(dataPoints[aspect] !== undefined){
+                                if (dataPoints[aspect] !== undefined) {
                                     var actual = inputFunction([i]);
-                                    if(typeof actual == "number"){
+                                    if (typeof actual == "number") {
                                         dataPoints.expected.push(actual);
-                                    }else if(actual.length !== undefined){
+                                    } else if (actual.length !== undefined) {
                                         dataPoints.expected.push(actual[onNode]);
                                     }
                                 }
                             }
                             break;
                         case "node":
+                            var parts = neuron.split("-");
+                            var layerP = parts[0].substring(1);
+                            var nodeP = parts[1].substring(1);
+                    
+                            var layerNum = parseInt(layerP);
+                            var nodeNum = parseInt(nodeP) - 1;
+                    
+                            var layer = this.network[layerNum];
+                            var node = layer.neurons[nodeNum];
+                    
                             if (aspectDenom == "error") {
                                 dataPoints[aspect].push(node.error);
                             } else if (aspectDenom = "output") {
@@ -129,7 +129,9 @@ class Network {
             graphData({
                 dataPoints,
                 compare: true,
-                filename: "study"
+                filename: "study",
+                xAxisLabel: "Input",
+                yAxisLabel: "Output"
             })
         }
         return dataPoints
@@ -264,9 +266,11 @@ class Network {
                 for (var k = 0; k < prevLayerOutputNeurons.length; k++) {
                     neuron.weights[k] -=
                         learningRate * error * prevLayerOutputNeurons[k].output;
+                    if(isNaN(neuron.weights[k]) && !this.ignoreNaN) throw new Error(`NaN detected, learning rate ${learningRate}, error: ${error}, prevLayerOut: ${prevLayerOutputNeurons[k].output}`)
                 }
                 // Update the bias for the current neuron
                 neuron.bias -= learningRate * error;
+                if(isNaN(neuron.bias) && !this.ignoreNaN) throw new Error(`NaN detected, learning rate: ${learningRate}, error: ${error}`)
             }
         }
     }
@@ -281,6 +285,7 @@ class Network {
                     var neuron = layer.neurons[j];
                     var output = neuron.output;
                     neuron.error = (output - expected[j]) * this._activation(output);
+                    if(isNaN(neuron.error) && !this.ignoreNaN) throw new Error(`NaN detected, calculating output neuron error\n Output: ${output}. Expected: ${expected[j]}. _activation: ${this._activation(output)}`)
                 }
             } else {
                 // calculate error for the hidden layers
@@ -311,6 +316,7 @@ class Network {
                 // jk they dont
                 layer.neurons.forEach((n, ni) => {
                     n.output = inputs[ni];
+                    if(isNaN(n.output)) throw new Error(`NaN detected, not a number passed: input: ${inputs[ni]}`)
                 });
                 if (verbose) console.log(`Feeding: [${inputs.join(",")}]`);
                 continue;
@@ -326,12 +332,13 @@ class Network {
                 for (var inp = 0; inp < precedingInputNeurons.length; inp++) {
                     if (verbose)
                         console.log(
-                            precedingInputNeurons[inp].id +
+                            "Prev node: " +precedingInputNeurons[inp].id +
                             ": " +
                             precedingInputNeurons[inp].output,
                         );
                     var prevoutput = precedingInputNeurons[inp].output;
                     var weight = node.weights[inp];
+                    if(verbose) console.log("Weight is: ",weight)
                     sum += weight * prevoutput;
                 }
                 // add the bias
@@ -339,11 +346,12 @@ class Network {
                 // set as the output for the corresponding node `b`
                 if (verbose)
                     console.log(
-                        `Node ${node.id}\n1. ${sum - node.bias}\n2. ${sum}\n3. ${this.activation(sum)}`,
+                        `Node ${node.id}\n\t(bias): ${node.bias}\n\t(sum-bias), sum, a(sum)\n\t1. ${sum - node.bias}\n\t2. ${sum}\n\t3. ${this.activation(sum)}`,
                     );
                 node.output = this.activation(sum);
             }
         }
+        if(verbose) console.log("Output:"+this.network[this.network.length - 1].getOutput())
         return this.network[this.network.length - 1].getOutput();
     }
 }
@@ -425,6 +433,26 @@ function _linear(x) {
 function randRange(min, max) {
     return Math.random() * (max - min) + min;
 }
+function exportToCSV({
+    dataPoints,
+    labelAlt,
+    filename
+}) {
+    dataPoints[labelAlt] = dataPoints.labels;
+    var header = [labelAlt, ...Object.keys(dataPoints).filter((col) => col !== "labels" && col !== labelAlt)]
+    var finalString = `${header.join(",")}`;
+    for (var i = 0; i < dataPoints.labels.length; i++) {
+        var record = [];
+        for (const col of Object.keys(dataPoints)) {
+            if (col == "labels") continue;
+            record[header.indexOf(col)] = (dataPoints[col][i]);
+        }
+        finalString += `\n${record.join(",")}`;
+    }
+    fs.writeFile("graphs/" + filename + ".csv", finalString, "utf-8", (err) => {
+        if (err) throw err;
+    })
+}
 function graphData({
     dataPoints,
     compare,
@@ -433,6 +461,9 @@ function graphData({
     yAxisLabel,
     logY = false
 }) {
+    if (!fs.existsSync("graphs")) {
+        fs.mkdirSync("graphs")
+    }
     const aspects = Object.keys(dataPoints);
     aspects.splice(aspects.indexOf('labels'), 1);
     var colors = ["#36a2eb", "#ff6384", "#4bc0c0", "#ff9f40", "#9966ff", "#ffcd56", "#c9cbcf"]
@@ -494,7 +525,7 @@ function graphData({
                         /^data:image\/png;base64,/,
                         "",
                     );
-                    fs.writeFile(filename + "-" + aspect + ".png", base64Data, "base64", function (err) {
+                    fs.writeFile("graphs/" + filename + "-" + aspect + ".png", base64Data, "base64", function (err) {
                         if (err) {
                             console.log(err);
                         }
@@ -509,7 +540,7 @@ function graphData({
                     /^data:image\/png;base64,/,
                     "",
                 );
-                fs.writeFile(filename + ".png", base64Data, "base64", function (err) {
+                fs.writeFile("graphs/" + filename + ".png", base64Data, "base64", function (err) {
                     if (err) {
                         console.log(err);
                     }
@@ -532,54 +563,111 @@ function evaluate({ model, numInputs, inputRange, inputFunction, numTrials }) {
         } else if (realOutput.length !== undefined) {
             expected = realOutput;
         }
-        errors.push(model.mse(outputs,expected));
+        errors.push(model.mse(outputs, expected));
     }
-    var meanerror = errors.reduce((acc,val)=>{
+    var meanerror = errors.reduce((acc, val) => {
         return acc + val
-    },0) / errors.length;
-    return {meanerror, errors}
+    }, 0) / errors.length;
+    return { meanerror, errors }
 }
-function examineParameter({ net,baseOptions, parameter, range, step, graph=false, aspects, evaluationParameters, }){
-    var dataPoints = {};
-    dataPoints["labels"] = [];
-    // aspects can be "model-error"
-    // thats it
-    for(const a of aspects){
-        dataPoints[a] = [];
+function examineParameter({ net, baseOptions, log=true, parameters, ranges, specificRanges = [], steps, aspects, evaluationParameters, exportcsv = false, graph = false }) {
+    var dataPoints = {
+        "labels": []
     }
-    var stepNum = new bigDecimal(step);
-    for(var i = new bigDecimal(range[0]); parseFloat(i.getValue()) < range[1]; i = i.add(stepNum)){
-        console.log(i.getValue(),  range[1], parseFloat(i.getValue()) < range[1])
-        baseOptions[parameter] = parseFloat(i.getValue());
-        net.reinitialize();
-        net.train(baseOptions);
-        for(const a of aspects){
-            var parts = a.split("-");
-            var aClass = parts[0];
-            var denom = parts[1];
-            switch(aClass){
-                case "model":
-                    if(denom == "error"){
-                        dataPoints.labels.push(i.getValue());
-                        dataPoints[a].push(evaluate({
-                            model: net,
-                            inputFunction: baseOptions.inputFunction,
-                            inputRange: evaluationParameters.inputRange,
-                            numTrials: evaluationParameters.numTrials,
-                            numInputs: evaluationParameters.numInputs,
-                        }).meanerror)
-                    }
+    var p = 0;
+    const step0 = steps[p];
+    const range0 = ranges[p];
+    const specificRange0 = specificRanges[0];
+    const parameter0 = parameters[p];
+    var stepNum0 = new bigDecimal(step0);
+    // this is the first paremeter, will be on X axis
+    var i = 0;
+    if (!specificRange0) {
+        i = new bigDecimal(range0[0]);
+    }
+    while (
+        (!specificRange0) ? parseFloat(i.getValue()) <= range0[1] :
+            (i < specificRange0.length)
+    ) {
+        const currentXValue = (!specificRange0) ? parseFloat(i.getValue()) : specificRange0[i];
+        var options = { ...baseOptions };
+        options[parameter0] = currentXValue;
+        dataPoints.labels.push(currentXValue);
+        if (parameters.length == 1) {
+            var specificRangeP = specificRange0
+            net.reinitialize();
+            options[parameters[p]] = (!specificRangeP) ? parseFloat(i.getValue()) : specificRangeP[i];
+            net.train(options);
+            var { meanerror: mse } = evaluate({
+                model: net,
+                numInputs: evaluationParameters.numInputs,
+                inputRange: evaluationParameters.inputRange,
+                inputFunction: baseOptions.inputFunction,
+                numTrials: evaluationParameters.numTrials
+            });
+            for (var a = 0; a < aspects.length; a++) {
+                var labelString = `${aspects[a]}`;
+                if (dataPoints[labelString] == undefined) dataPoints[labelString] = [];
+                var dataPoint = (aspects[a] == "model-error") ? mse : 1
+                dataPoints[labelString].push(dataPoint);
             }
-        }  
+        }
+        // then, we find all of the values for the other parameters at this point on the X axis and add them as a series
+        for (p = 1; p < parameters.length; p++) {
+            const range = ranges[p];
+            const step = steps[p];
+            const stepNum = new bigDecimal(step);
+            const specificRangeP = specificRanges[p];
+            var np = (specificRangeP) ? 0 : new bigDecimal(range[0])
+            while (
+                (specificRangeP) ? np < specificRangeP.length :
+                    parseFloat(np.getValue()) <= range[1]
+            ) {
+                net.reinitialize();
+                options[parameters[p]] = (!specificRangeP) ? parseFloat(np.getValue()) : specificRangeP[np];
+                net.train(options);
+                var { meanerror: mse } = evaluate({
+                    model: net,
+                    numInputs: evaluationParameters.numInputs,
+                    inputRange: evaluationParameters.inputRange,
+                    inputFunction: baseOptions.inputFunction,
+                    numTrials: evaluationParameters.numTrials
+                });
+                for (var a = 0; a < aspects.length; a++) {
+                    var labelString = `${aspects[a]}_${parameters[p]}-${(!specificRangeP) ? parseFloat(np.getValue()) : specificRangeP[np]}`;
+                    if (dataPoints[labelString] == undefined) dataPoints[labelString] = [];
+                    var dataPoint = (aspects[a] == "model-error") ? mse : 1
+                    dataPoints[labelString].push(dataPoint);
+                }
+                if (!specificRangeP) {
+                    np = np.add(stepNum);
+                } else {
+                    np++;
+                }
+            }
+        }
+        if (!specificRange0) {
+            i = i.add(stepNum0);
+        } else {
+            i++
+        }
     }
-    if(graph){
+    if (graph) {
         graphData({
             dataPoints,
             compare: true,
-            filename: "examineParameter",
-            logY: true,
-            xAxisLabel: parameter
-        
+            filename: "examineParameter-" + parameters.join("_"),
+            logY: log,
+            xAxisLabel: parameters[0],
+            yAxisLabel: aspects[0]
+
+        })
+    }
+    if (exportcsv) {
+        exportToCSV({
+            dataPoints,
+            filename: "examineParameter-" + parameters.join("_"),
+            labelAlt: parameters[0]
         })
     }
     return dataPoints;
