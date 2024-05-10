@@ -2,7 +2,7 @@ const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 const fs = require("fs");
 var bigDecimal = require('js-big-decimal').default;
 class Network {
-    constructor({ inputs, outputs, hiddenLayers = [], activation, ignoreNaN=false }) {
+    constructor({ inputs, outputs, hiddenLayers = [], activation, ignoreNaN = false }) {
         this.activationFunction = activation;
         this.numInputs = inputs;
         this.numOutputs = outputs;
@@ -106,13 +106,13 @@ class Network {
                             var parts = neuron.split("-");
                             var layerP = parts[0].substring(1);
                             var nodeP = parts[1].substring(1);
-                    
+
                             var layerNum = parseInt(layerP);
                             var nodeNum = parseInt(nodeP) - 1;
-                    
+
                             var layer = this.network[layerNum];
                             var node = layer.neurons[nodeNum];
-                    
+
                             if (aspectDenom == "error") {
                                 dataPoints[aspect].push(node.error);
                             } else if (aspectDenom = "output") {
@@ -139,16 +139,23 @@ class Network {
     // input function requires a range defined. Input function accepts only 1 parameter, which mean your model must only accept one input.
     train({
         inputSet,
+        numInputs,
         inputFunction,
         inputRange = [-1, 1],
         outSet,
         learningRate,
         epochs,
+        batchSize = 32,
         verbose = true,
         graph = false,
         aspects = ["error"],
         compare = true,
+        logY = true
     }) {
+        if(!numInputs && !inputSet) throw new Error("You must define either an input set or a number of inputs")
+        if(!inputSet && !inputFunction) throw new Error("You must pass an input function if not providing an input set");
+        if(!inputSet && !outSet && !inputFunction) throw new Error("You must provide both an input and an output set if not configuring an input function")
+        if(!numInputs) numInputs = inputSet.length;
         var gValues = {
             labels: [],
         };
@@ -160,33 +167,48 @@ class Network {
                 gValues[aspects[i]] = [];
             }
         }
-        if (verbose)
+        if (verbose) {
             console.log(
                 `Training, ${learningRate} learning rate, ${epochs} epochs`,
             );
-        for (var i = 0; i < epochs; i++) {
-            var inputs = [];
-            var expected = [];
-            if (!inputFunction) {
-                var index = Math.floor(Math.random() * inputSet.length);
-                inputs = inputSet[index];
-                expected = outSet[index];
-            } else {
-                var inputs = [];
-                for (var numIx = 0; numIx < this.numInputs; numIx++) {
-                    inputs.push(randRange(inputRange[0], inputRange[1]));
-                }
-                var realOutput = inputFunction(...inputs);
-                if (typeof realOutput == "number") {
-                    expected = [realOutput]
-                } else if (realOutput.length !== undefined) {
-                    expected = realOutput;
-                }
+        }
+        if (inputFunction) {
+            inputSet = [];
+            outSet = [];
+            if (verbose) {
+                console.log("Input function defined, defaulting to that")
             }
+            for (var i = 0; i < numInputs; i++) {
+                var x = randRange(inputRange[0], inputRange[1]);
+                var fx = inputFunction(x);
+                inputSet.push([x]);
+                outSet.push([fx]);
+            }
+            if (verbose) {
+                console.log(`Input and output sets defined according to inputFunction, length: ${inputSet.length}`)
+            }
+        }
+        var shuffledIndexes = [...Array(inputSet.length).keys()];
 
-            var output = this.forwardPass(inputs);
-            if (verbose)
-                console.log(`${i}/${epochs} ===== mse = ${this.mse(output, expected)}`);
+        for (var i = 0; i < epochs; i++) {
+            if (verbose) { console.log("Epoch", i) }
+            // Shuffle inputSet and outSet if needed
+            shuffleArray(shuffledIndexes);
+            var accErr = 0;
+            var batchInputs = [];
+            var batchExpected = [];
+            for(var j = 0; j < batchSize; j++){
+                var inputs = inputSet[shuffledIndexes[j]];
+                var expected = outSet[shuffledIndexes[j]];
+                var output = this.forwardPass(inputs);
+                accErr += this.mse(expected, output);
+                this.backwardPass(inputs, expected);
+                console.log("\t"+j+": backward passed")
+            }
+            accErr = accErr / batchSize;
+            // Modify weights after processing the entire batch
+            this.modifyWeights(learningRate, batchSize);
+            console.log("weight modified")
             if (graph) {
                 for (const aspect of aspects) {
                     var parts = aspect.split("-");
@@ -195,9 +217,9 @@ class Network {
                         case "error":
                             var errorCase = parts[1];
                             if (errorCase == "mse") {
-                                gValues[aspect].push(this.mse(output, expected));
+                                gValues[aspect].push(accErr);
                             } else {
-                                gValues[aspect].push(this.mse(output, expected));
+                                gValues[aspect].push(accErr);
                             }
                             break;
                         case "weight":
@@ -240,59 +262,42 @@ class Network {
                     }
                 }
                 gValues.labels.push(i);
+                console.log("label added")
             }
-            this.backwardPass(inputs, expected);
-            this.modifyWeights(learningRate);
         }
         if (graph) {
             graphData({
                 dataPoints: gValues,
                 compare,
-                filename: "training"
-            })
-        }
-    }
-    modifyWeights(learningRate) {
-        // Iterate over each layer (excluding the input layer)
-        for (var i = 1; i < this.network.length; i++) {
-            var layer = this.network[i];
-            var prevLayerOutputNeurons = this.network[i - 1].neurons;
-            // Iterate over each neuron in the layer
-            for (var j = 0; j < layer.neurons.length; j++) {
-                var neuron = layer.neurons[j];
-                // Get the error for the current neuron
-                var error = neuron.error;
-                // Iterate over each weight connected to the current neuron
-                for (var k = 0; k < prevLayerOutputNeurons.length; k++) {
-                    neuron.weights[k] -=
-                        learningRate * error * prevLayerOutputNeurons[k].output;
-                    if(isNaN(neuron.weights[k]) && !this.ignoreNaN) throw new Error(`NaN detected, learning rate ${learningRate}, error: ${error}, prevLayerOut: ${prevLayerOutputNeurons[k].output}`)
-                }
-                // Update the bias for the current neuron
-                neuron.bias -= learningRate * error;
-                if(isNaN(neuron.bias) && !this.ignoreNaN) throw new Error(`NaN detected, learning rate: ${learningRate}, error: ${error}`)
-            }
+                filename: "training",
+                logY
+            });
         }
     }
     backwardPass(inputs, expected) {
-        // go backwards from the output layer to the input
+        // Initialize errorSum for each neuron
+        for (var i = 0; i < this.network.length; i++) {
+            var layer = this.network[i];
+            for (var j = 0; j < layer.neurons.length; j++) {
+                layer.neurons[j].errorSum = 0;
+            }
+        }
+
+        // Backward pass for the batch
         for (var i = this.network.length - 1; i >= 0; i--) {
             var layer = this.network[i];
-            // if the layer is the output layer, calculate error from expected
             if (i == this.network.length - 1) {
-                // go through each node and find the individual error
+                // Error calculation for output layer
                 for (var j = 0; j < layer.neurons.length; j++) {
                     var neuron = layer.neurons[j];
                     var output = neuron.output;
                     neuron.error = (output - expected[j]) * this._activation(output);
-                    if(isNaN(neuron.error) && !this.ignoreNaN) throw new Error(`NaN detected, calculating output neuron error\n Output: ${output}. Expected: ${expected[j]}. _activation: ${this._activation(output)}`)
+                    neuron.errorSum += neuron.error; // Accumulate error for the batch
                 }
             } else {
-                // calculate error for the hidden layers
+                // Error calculation for hidden layers
                 for (var j = 0; j < layer.neurons.length; j++) {
                     var errorSum = 0;
-                    // accumulate error from the forward nodes, corresponding with their weights
-                    // (if the weight is small, modifications will not change much)
                     var forwardLayer = this.network[i + 1];
                     var neuron = layer.neurons[j];
                     for (var k = 0; k < forwardLayer.neurons.length; k++) {
@@ -301,9 +306,25 @@ class Network {
                         var forwardError = fneuron.error;
                         errorSum += weightToCurrent * forwardError;
                     }
-                    // add the error for the current node (j)
                     neuron.error = errorSum * this._activation(neuron.output);
+                    neuron.errorSum += neuron.error; // Accumulate error for the batch
                 }
+            }
+        }
+    }
+
+    modifyWeights(learningRate, batchSize) {
+        // Weight modification for the batch
+        for (var i = 1; i < this.network.length; i++) {
+            var layer = this.network[i];
+            var prevLayerOutputNeurons = this.network[i - 1].neurons;
+            for (var j = 0; j < layer.neurons.length; j++) {
+                var neuron = layer.neurons[j];
+                var error = neuron.errorSum / batchSize; // Average error for the batch
+                for (var k = 0; k < prevLayerOutputNeurons.length; k++) {
+                    neuron.weights[k] -= learningRate * error * prevLayerOutputNeurons[k].output;
+                }
+                neuron.bias -= learningRate * error;
             }
         }
     }
@@ -311,12 +332,9 @@ class Network {
         for (var i = 0; i < this.network.length; i++) {
             var layer = this.network[i];
             if (i == 0) {
-                // this is this input layer
-                // the input neurons already have their ouput configured as input
-                // jk they dont
                 layer.neurons.forEach((n, ni) => {
                     n.output = inputs[ni];
-                    if(isNaN(n.output)) throw new Error(`NaN detected, not a number passed: input: ${inputs[ni]}`)
+                    if (isNaN(n.output) && !this.ignoreNaN) throw new Error(`NaN detected, not a number passed: input: ${inputs[ni]}`)
                 });
                 if (verbose) console.log(`Feeding: [${inputs.join(",")}]`);
                 continue;
@@ -332,13 +350,13 @@ class Network {
                 for (var inp = 0; inp < precedingInputNeurons.length; inp++) {
                     if (verbose)
                         console.log(
-                            "Prev node: " +precedingInputNeurons[inp].id +
+                            "Prev node: " + precedingInputNeurons[inp].id +
                             ": " +
                             precedingInputNeurons[inp].output,
                         );
                     var prevoutput = precedingInputNeurons[inp].output;
                     var weight = node.weights[inp];
-                    if(verbose) console.log("Weight is: ",weight)
+                    if (verbose) console.log("Weight is: ", weight)
                     sum += weight * prevoutput;
                 }
                 // add the bias
@@ -351,7 +369,7 @@ class Network {
                 node.output = this.activation(sum);
             }
         }
-        if(verbose) console.log("Output:"+this.network[this.network.length - 1].getOutput())
+        if (verbose) console.log("Output:" + this.network[this.network.length - 1].getOutput())
         return this.network[this.network.length - 1].getOutput();
     }
 }
@@ -472,6 +490,7 @@ function graphData({
         height: 600,
         backgroundColour: "white"
     });
+    console.log("chart defined")
     var configuration = {};
     if (compare) {
         configuration = {
@@ -505,6 +524,7 @@ function graphData({
                     label: aspect,
                     borderColor: colors[aspects.indexOf(aspect) % colors.length]
                 });
+                console.log("data points "+aspect+" added")
             } else {
                 var configuration = {
                     type: "line",
@@ -519,33 +539,20 @@ function graphData({
                         ],
                     },
                 };
-                chartJSNodeCanvas.renderToDataURL(configuration).then((dataUrl) => {
-                    const base64Image = dataUrl;
-                    var base64Data = base64Image.replace(
-                        /^data:image\/png;base64,/,
-                        "",
-                    );
-                    fs.writeFile("graphs/" + filename + "-" + aspect + ".png", base64Data, "base64", function (err) {
-                        if (err) {
-                            console.log(err);
-                        }
-                    });
+                const writeStream = fs.createWriteStream("graphs/"+filename+".png", {
+                    encoding: "utf-8"
                 });
+                const stream = chartJSNodeCanvas.renderToStream(configuration);
+                stream.pipe(writeStream)
             }
         }
         if (compare) {
-            chartJSNodeCanvas.renderToDataURL(configuration).then((dataUrl) => {
-                const base64Image = dataUrl;
-                var base64Data = base64Image.replace(
-                    /^data:image\/png;base64,/,
-                    "",
-                );
-                fs.writeFile("graphs/" + filename + ".png", base64Data, "base64", function (err) {
-                    if (err) {
-                        console.log(err);
-                    }
-                });
+            console.log("rendering chart")
+            const writeStream = fs.createWriteStream("graphs/"+filename+".png", {
+                encoding: "utf-8"
             });
+            const stream = chartJSNodeCanvas.renderToStream(configuration);
+            stream.pipe(writeStream)
         }
     }
 }
@@ -570,7 +577,7 @@ function evaluate({ model, numInputs, inputRange, inputFunction, numTrials }) {
     }, 0) / errors.length;
     return { meanerror, errors }
 }
-function examineParameter({ net, baseOptions, log=true, parameters, ranges, specificRanges = [], steps, aspects, evaluationParameters, exportcsv = false, graph = false }) {
+function examineParameter({ net, baseOptions, log = true, parameters, ranges, specificRanges = [], steps, aspects, evaluationParameters, exportcsv = false, graph = false }) {
     var dataPoints = {
         "labels": []
     }
@@ -625,6 +632,7 @@ function examineParameter({ net, baseOptions, log=true, parameters, ranges, spec
             ) {
                 net.reinitialize();
                 options[parameters[p]] = (!specificRangeP) ? parseFloat(np.getValue()) : specificRangeP[np];
+                console.log(options)
                 net.train(options);
                 var { meanerror: mse } = evaluate({
                     model: net,
@@ -671,6 +679,14 @@ function examineParameter({ net, baseOptions, log=true, parameters, ranges, spec
         })
     }
     return dataPoints;
+}
+function shuffleArray(array) {
+    // Fisher-Yates shuffle algorithm
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array; // Optional: return the shuffled array
 }
 module.exports = {
     Network,
