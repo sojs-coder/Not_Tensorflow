@@ -3,29 +3,30 @@ const { Network, evaluate, examineParameter } = require("./neuron");
 const net = new Network({
     inputs: 1,
     outputs: 1,
+    hiddenLayers: [5],
     activation: "linear",
     ignoreNaN: false
 });
-const inputFunction = (x) => x;
+const inputFunction = (x) => 1.5 * (x);
 const trainingOptions = {
     inputFunction,
     inputRange: [-50, 50],
     learningRate: 0.05,
     epochs: 10000,
     batchSize: 100,
-    numInputs: 10000,
+    numInputs: 1000,
     verbose: false,
 }
 const evaluationParameters = {
-    inputRange: [-50,50],
+    inputRange: [-1,1],
     numTrials: 100,
     numInputs: 1,
     model: net,
     inputFunction
 }
 const studyOptions = {
-    inputRange: [0,10],
-    inputStep: 0.5,
+    inputRange: [-1,1],
+    inputStep: 0.1,
     aspects: ["model-output-n1","expected"],
     graph: true,
     inputFunction
@@ -46,11 +47,11 @@ const studyOptions = {
 // net.reinitialize()
 net.train({
     inputFunction,
-    inputRange: [-50, 50],
-    learningRate: 0.05,
-    epochs: 10000,
-    batchSize: 10,
-    numInputs: 10000,
+    inputRange: [-1, 1],
+    learningRate: 0.005,
+    epochs: 1000,
+    batchSize: 5,
+    numInputs: 1000,
     verbose: false,
     graph: true,
     aspects: ["error-mse","weight-l1-n1-w1","bais-l1-n1"]
